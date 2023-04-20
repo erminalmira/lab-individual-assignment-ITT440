@@ -1,0 +1,79 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <string.h>
+
+#define MAX_CHILDREN 10
+#define MAX_MESSAGE_LEN 100
+
+int num_children = 0;
+pid_t children[MAX_CHILDREN];
+
+void handle_interrupt(int signal) {
+    printf("\nInterrupt received. Terminating all child processes...\n");
+    for (int i = 0; i < num_children; i++) {
+        kill(children[i], SIGTERM);
+    }
+    exit(EXIT_SUCCESS);
+}
+
+int main() {
+    int pipefd[2]; // file descriptors for pipe
+    char message[MAX_MESSAGE_LEN];
+    
+    // set up pipe
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
+    
+    // set up interrupt handler
+    signal(SIGINT, handle_interrupt);
+    
+    // fork into multiple child processes
+    for (int i = 0; i < MAX_CHILDREN; i++) {
+        pid_t pid = fork();
+        if (pid == -1) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) { // child process
+            close(pipefd[1]); // close write end of pipe
+            while (1) {
+                char buffer[MAX_MESSAGE_LEN];
+                ssize_t num_bytes = read(pipefd[0], buffer, MAX_MESSAGE_LEN);
+                if (num_bytes == -1) {
+                    perror("read");
+                    exit(EXIT_FAILURE);
+                } else if (num_bytes == 0) {
+                    printf("Parent process has closed the pipe.\n");
+                    break;
+                } else {
+                    printf("Child %d received message: %s", i+1, buffer);
+                }
+            }
+            close(pipefd[0]); // close read end of pipe
+            exit(EXIT_SUCCESS);
+        } else { // parent process
+            children[i] = pid;
+            num_children++;
+        }
+    }
+    
+    // parent process gets message from user and sends to all children
+    close(pipefd[0]); // close read end of pipe
+    while (1) {
+        printf("Enter a message to send to children (or Ctrl+C to quit): ");
+        fgets(message, MAX_MESSAGE_LEN, stdin);
+        if (strlen(message) == 1) { // empty message (only newline)
+            continue;
+        } else if (write(pipefd[1], message, strlen(message)) == -1) {
+            perror("write");
+            exit(EXIT_FAILURE);
+        } else {
+            printf("Message sent to all children.\n");
+        }
+    }
+    close(pipefd[1]); // close write end of pipe
+    return 0;
+}
